@@ -26,13 +26,6 @@ get_midpoint <- function(range) {
   mean(as.numeric(unlist(strsplit(gsub("\\(|\\)|\\[|\\]", "", as.character(range)), ","))))
 }
 
-# Inverse intersection function
-# From: https://www.r-bloggers.com/2011/11/outersect-the-opposite-of-rs-intersect-function/
-outersect <- function(x, y) {
-  sort(c(setdiff(x, y),
-         setdiff(y, x)))
-}
-
 # Function to set pretty default plot
 prettify <- theme_bw() +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
@@ -50,14 +43,14 @@ prettify <- theme_bw() +
   theme(panel.border = element_rect(colour = "black", fill=NA, size = 1))
 ```
 
-## Specify paths
+## Specify paths (fill in PATH and SUBPATHs)
 ```{r}
 # Folders
-gen_path <- "/Users/Merijn/Desktop/PLT embryos/"
-peak_path <- paste(gen_path,"PLT_target_expression/Regulome/consensus_peaks_with_motif/",sep = "")
-RNA_path <- paste(gen_path,"PLT_target_expression/",sep = "")
-scRNA_path <- paste(gen_path,"PLT_target_expression/Phloem scRNA-seq/",sep = "")
-output_path <- paste(gen_path,"MS/2023 figs/R_plots/",sep = "")
+gen_path <- "PATH"
+peak_path <- paste(gen_path,"SUBPATH",sep = "")
+RNA_path <- paste(gen_path,"SUBPATH",sep = "")
+scRNA_path <- paste(gen_path,"SUBPATH",sep = "")
+output_path <- paste(gen_path,"SUBPATH",sep = "")
 ```
 
 ## Load input files (specify path!)
