@@ -14,6 +14,11 @@ knitr::opts_chunk$set(echo = FALSE)
 ```{r}
 library(magrittr)
 library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(rstatix)
+library(ggvenn)
 ```
 
 ## Functions
@@ -111,6 +116,7 @@ ggplot() +
   prettify
 
 ggsave(paste(output_path,"peaks_tss.pdf",sep = ""), width = 4, height = 4)
+write.table(peak_list, file=paste(output_path,"peaks.txt",sep = ""))
 ```
 
 ## Select upregulated genes only (not genes in upregulated by one+ PLT and downregulated by another)
