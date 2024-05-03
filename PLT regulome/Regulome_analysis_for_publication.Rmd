@@ -1,0 +1,1607 @@
+---
+title: "Regulome analysis of PLT TFs"
+author: "Merijn Kerstens"
+citation: "Kerstens, Galinha, Hofhuis et al., 2024: PLETHORA transcription factors promote early embryo development through induction of meristematic potential"
+latest update: "30/04/2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Load required packages
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggvenn)
+library(magrittr)
+library(readxl)
+library(rstatix)
+library(Seurat)
+library(tibble)
+library(tidyr)
+```
+
+## Functions
+```{r}
+# Convert counts to log10 TPM values
+logTPM <- function(x) {return(log10(x+1))}
+
+# Calculate the mid-point between of a range
+get_midpoint <- function(range) {
+  mean(as.numeric(unlist(strsplit(gsub("\\(|\\)|\\[|\\]", "", as.character(range)), ","))))
+}
+
+# Function to set pretty default plot
+prettify <- theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  theme(axis.line = element_line(colour="black")) +
+  theme(axis.text.y = element_text(colour="black", size = 14)) +
+  theme(axis.text.x = element_text(colour = "black", size = 14)) +
+  theme(axis.ticks = element_line(colour="black")) +
+  theme(legend.text.align = 0) +
+  theme(legend.text = element_text(size = 14)) +
+  theme(axis.title.y = element_text(size = 16)) + 
+  theme(axis.title.x = element_text(size = 16)) + 
+  theme(legend.position = "right") +
+  theme(strip.text.y = element_blank()) +
+  theme(strip.background = element_blank()) +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size = 1))
+```
+
+## Specify paths (fill in PATH and SUBPATHs)
+```{r}
+# Folders
+gen_path <- "PATH"
+peak_path <- paste(gen_path,"SUBPATH", sep = "")
+RNA_path <- paste(gen_path,"SUBPATH", sep = "")
+scRNA_path <- paste(gen_path,"SUBPATH", sep = "")
+sc_atlas_path <- paste(gen_path,"SUBPATH", sep = "")
+output_path <- paste(gen_path,"SUBPATH", sep = "")
+```
+
+## Load input files (specify path)
+```{r}
+# PLT ChIP/DAP peaks (this study)
+peak_dist <- read.table(paste(peak_path,"all_peaks_homer.txt",sep = ""), sep = '\t', header = T) %>%
+  select(1,Distance.to.TSS, Nearest.Unigene)
+colnames(peak_dist) <- c("peakname","distance","V1")
+
+# PLT overexpression data (Santuari et al., 2016); supplemental data 1; tab "Compendium"; columns "AGI", and "PLT1" to "PLT7"
+PLT_list <- read.csv(paste(RNA_path,"Santuari_set.csv",sep = ""), header=T)
+
+# Root meristem RNA-seq (Li et al., 2016); NIHMS824562-supplement-9
+Roots <- read.csv(paste(RNA_path,"celltypes_Lietal2016.csv",sep = ""), header = T)
+
+# Shoot stem cell RNA-seq (Gutzat et al., 2020); dataset EV1; selected columns = "atg" (renamed to GeneID), "TPM_41768_D7+" (renamed to SAM_7D_1), "TPM_41766_D7+" (renamed to SAM_7D_2), "TPM_41772_D14+" (renamed to SAM_14D_1),	"TPM_41770_D14+" renamed to (SAM_14D_2), "TPM_41776_D35+" (renamed to SAM_35D_1),	"TPM_41774_D35+" (renamed to SAM_35D_2)
+SAM <- read.csv(paste(RNA_path,"SAM_Gutzat_R.csv", sep = ""), header=T)
+
+# Apical cell and basal cell RNA-seq (Zhou et al., 2020); AC1/2/3 and BC1/2/3 downloaded from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE135422 then merged to a 4-column GeneID-C1-C2-C3 file
+AC <- read.csv(paste(RNA_path,"AC.csv", sep = ""), header=T)
+BC <- read.csv(paste(RNA_path,"BC.csv", sep = ""), header=T)
+
+# Zygote RNA-seq (Zhao et al., 2019); Zy14-1/2/3 and Zy24-1/2/3 downloaded from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE121003
+Zy14_1 <- read_excel(paste(RNA_path, "GSM3423804_Zy14-1-FPKM.xlsx", sep = ""))
+Zy14_2 <- read_excel(paste(RNA_path, "GSM3423805_Zy14-2-FPKM.xlsx", sep = ""))
+Zy14_3 <- read_excel(paste(RNA_path, "GSM3423806_Zy14-3-FPKM.xlsx", sep = ""))
+Zy24_1 <- read_excel(paste(RNA_path, "GSM3423807_Zy24-1-FPKM.xlsx", sep = ""))
+Zy24_2 <- read_excel(paste(RNA_path, "GSM3423808_Zy24-2-FPKM.xlsx", sep = ""))
+Zy24_3 <- read_excel(paste(RNA_path, "GSM3423809_Zy24-3-FPKM.xlsx", sep = ""))
+
+# Protophloem sieve element scRNA-seq data (Roszak et al., 2021) cuffnorm FPKM; from https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE140778
+phloemsc <- read.table(paste(scRNA_path,"GSE140778_20190115_data.txt", sep = ""), header = T)
+
+# Protophloem sieve element scRNA-seq data (Roszak et al., 2021); pseudotime (Table S17); selected columns = "ID", "Cluster_PSE", and "Pseudotime_PSE"
+phloem_pt <- read.table(paste(scRNA_path,"phloem_scseq_pseudotime_Roszak2021.txt", sep = ""), header = T)
+
+# Col-0 root scRNA-seq data (Shahan et al., 2022); unzipped from https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM4626nnn/GSM4626009/suppl/GSM4626009_col0_COPILOT.rds.gz
+root_sc_col0 <- readRDS(paste(sc_atlas_path, "GSE152766_col0_COPILOT", sep = ""))
+root_sc_col0 <- as.data.frame(root_sc_col0@assays$RNA@data)
+# Normalize (to TP10k)
+root_sc_col0_norm <- root_sc_col0 %>%
+  mutate_if(is.numeric, funs(./sum(.)*10000))
+rm(root_sc_col0)
+
+# Count total genes in dataset
+sc_col0_agi_list <- as.data.frame(rownames(root_sc_col0_norm))
+
+# Shahan et al. 2022 metadata (SuppData3_complete.xltx)
+shahan_meta <- read_excel(paste(sc_atlas_path, "SuppData3_complete.xltx", sep = ""), sheet = "atlas meta data", skip = 1) %>% select(cell_barcode_id, orig.ident, celltype.anno, time.anno, consensus.time, consensus.time.group) %>% filter(orig.ident == "col0") %>% rename(barcode = cell_barcode_id)
+shahan_meta$barcode <- gsub('_.*', '', shahan_meta$barcode)
+
+# TAIR10 genes (from TAIR)
+TAIR10_AGI_list <- read.table(paste(RNA_path,"TAIR10_genes.txt",sep = ""), header = F)
+colnames(TAIR10_AGI_list) <- "AGI"
+```
+## Determine number and distribution of peaks
+```{r}
+### Counts ####
+
+# Count number of annotated, overlapping peaks
+length(unique(peak_dist$peakname))
+
+# Count number of annotated, overlapping peaks in terms of unique AGIs
+length(unique(peak_dist$V1))
+
+# Count number of annotated, overlapping [-4000,4000] peaks in terms of unique AGIs
+tmp <- peak_dist %>% filter(distance >= -4000 & distance <= 4000)
+length(unique(tmp$V1))
+
+### Make dataframe containing the 2406 selected peaks ###
+peak_list <- peak_dist %>% 
+  filter(distance >= -4000 & distance <= 4000) %>% 
+  select(V1) %>% 
+  unique()
+
+### Plotting ###
+ggplot() +
+  geom_vline(xintercept = 0, size = 0.7, linetype = "dashed", color = "grey") +
+  geom_density(data = peak_dist, aes(y = ..density.. * 10^4, x = distance), color = "black") +
+  xlim(-4001,4001) +
+  ylim(0, 5) +
+  xlab("Distance to TSS (bp)") +
+  ylab(expression(Density~(10^{"-4"}))) +
+  prettify
+
+ggsave(paste(output_path,"peaks_tss.pdf",sep = ""), width = 4, height = 4)
+write.table(peak_list, file=paste(output_path,"peaks.txt",sep = ""))
+```
+
+## Select upregulated genes only (not genes in upregulated by one+ PLT and downregulated by another)
+```{r}
+## Filter out non/downregulated genes and NAs from the microarray data
+PLT_list %<>%
+  mutate(regu = rowSums(.[2:7])) %>%
+  filter(regu > 0) %>%
+  filter(PLT1 > -1 & PLT2 > -1 & PLT3 > -1 & PLT4 > -1 & PLT5 > -1 & PLT7 > -1) %>%
+  na.omit %>%
+  .[1:7]
+
+dim(PLT_list)
+```
+
+## Overlap
+```{r}
+## Overlap between PLT-bound and PLT-upregulated genes
+overlap <- intersect(PLT_list$AGI,peak_list$V1) %>% as.data.frame()
+write.table(overlap, file=paste(output_path,"PLT_bound_upregulated.txt",sep = ""))
+
+## Make new dataframe
+PLT_total <- overlap
+colnames(PLT_total) <- "AGI"
+rownames(PLT_total) <- PLT_total$AGI
+```
+
+## Process root meristem data (Li et al., 2016) to log10 TPM
+```{r}
+# Sum isoforms
+Roots$X %<>% gsub("\\..*$","", .)
+
+# Extract root zones
+Roots %<>%
+  group_by(X) %>%
+  summarise(Mer = sum(Mer), Elong = sum(Elong), Mat = sum(Mat), WOX5 = sum(WOX5))
+
+# Make AGI list
+Li2016_AGI_list <- Roots %>% select(X)
+colnames(Li2016_AGI_list) <- "AGI"
+
+Mer <- Roots %>% select(X, Mer)
+Elong <- Roots %>% select(X, Elong)
+Mat <- Roots %>% select(X, Mat)
+WOX5 <- Roots %>% select(X, WOX5)
+
+# Clean up data: FPKM should be greater than 0
+dim(Mer)
+Mer %<>% filter(Mer > 0) %>% column_to_rownames('X')
+dim(Mer)
+
+dim(Mat)
+Mat %<>% filter(Mat > 0) %>% column_to_rownames('X')
+dim(Mat)
+
+dim(Elong)
+Elong %<>% filter(Elong > 0) %>% column_to_rownames('X')
+dim(Elong)
+
+dim(WOX5)
+WOX5 %<>% filter(WOX5 > 0) %>% column_to_rownames('X')
+dim(WOX5)
+
+# FPKM to log10 TPM conversion
+Mer$TPM <- Mer$Mer / sum(Mer$Mer) * 1000000
+Elong$TPM <- Elong$Elong / sum(Elong$Elong) * 1000000
+Mat$TPM <- Mat$Mat / sum(Mat$Mat) * 1000000
+WOX5$TPM <- WOX5$WOX5 / sum(WOX5$WOX5) *1000000
+
+Mer %<>% mutate_if(is.numeric, logTPM) %>% .[2]
+Elong %<>% mutate_if(is.numeric, logTPM) %>% .[2]
+Mat %<>% mutate_if(is.numeric, logTPM) %>% .[2]
+WOX5 %<>% mutate_if(is.numeric, logTPM) %>% .[2]
+```
+
+## Process shoot stem cell data (Gutzat et al., 2020) to log10 TPM
+```{r}
+# Split datasets per SAM age
+rownames(SAM) <- SAM$GeneID
+
+SAM_7D <- SAM[2:3]
+SAM_14D <- SAM[4:5]
+SAM_35D <- SAM[6:7]
+
+# Make AGI list
+Gutzat2020_AGI_list <- SAM %>% select(GeneID)
+colnames(Gutzat2020_AGI_list) <- "AGI"
+
+# log10 TPM conversion 
+SAM_7D %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0) %>% mutate_if(is.numeric, logTPM) %>% .[3]
+SAM_14D %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0) %>% mutate_if(is.numeric, logTPM) %>% .[3]
+SAM_35D %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0) %>% mutate_if(is.numeric, logTPM) %>% .[3]
+```
+
+## Process AC/BC data (Zhou et al., 2020) to log10 TPM
+```{r}
+# Syntax
+rownames(AC) <- AC$GeneID
+rownames(BC) <- BC$GeneID
+AC <- AC[2:4]
+BC <- BC[2:4]
+dim(AC)
+dim(BC)
+
+# AGI list
+Zhou2020_AGI_list <- AC %>% rownames_to_column("AGI") %>% select("AGI")
+
+# TPM conversion + average the three replicates, TPM, AC
+AC$TPM1 <- AC$AC1 / sum(AC$AC1) * 1000000
+AC$TPM2 <- AC$AC2 / sum(AC$AC2) * 1000000
+AC$TPM3 <- AC$AC3 / sum(AC$AC3) * 1000000
+AC <- AC[4:6]
+AC %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0)
+
+# TPM conversion + average the three replicates, TPM, BC
+BC$TPM1 <- BC$BC1 / sum(BC$BC1) * 1000000
+BC$TPM2 <- BC$BC2 / sum(BC$BC2) * 1000000
+BC$TPM3 <- BC$BC3 / sum(BC$BC3) * 1000000
+BC <- BC[4:6]
+BC %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0)
+
+# logTPM conversion
+AC %<>% mutate_if(is.numeric, logTPM) %>% .[4]
+dim(AC)
+BC %<>% mutate_if(is.numeric, logTPM) %>% .[4]
+dim(BC)
+```
+## Process zygote data (Zhao et al., 2019) to log10 TPM
+```{r}
+# Syntax
+colnames(Zy14_1) <- c("AGI", "Zy14_1")
+colnames(Zy14_2) <- c("AGI", "Zy14_2")
+colnames(Zy14_3) <- c("AGI", "Zy14_3")
+colnames(Zy24_1) <- c("AGI", "Zy24_1")
+colnames(Zy24_2) <- c("AGI", "Zy24_2")
+colnames(Zy24_3) <- c("AGI", "Zy24_3")
+
+Zy14 <- merge(Zy14_1, Zy14_2, by = "AGI", all = TRUE) %>% merge(Zy14_3, by = "AGI", all = TRUE) %>% mutate_all(funs(ifelse(is.na(.), 0, .)))
+Zy24 <- merge(Zy24_1, Zy24_2, by = "AGI", all = TRUE) %>% merge(Zy24_3, by = "AGI", all = TRUE) %>% mutate_all(funs(ifelse(is.na(.), 0, .)))
+
+rownames(Zy14) <- Zy14$AGI
+rownames(Zy24) <- Zy24$AGI
+Zy14 <- Zy14[2:4]
+Zy24 <- Zy24[2:4]
+dim(Zy14)
+dim(Zy24)
+
+# TPM conversion + average the three replicates, TPM, AC
+Zy14$TPM1 <- Zy14$Zy14_1 / sum(Zy14$Zy14_1) * 1000000
+Zy14$TPM2 <- Zy14$Zy14_2 / sum(Zy14$Zy14_2) * 1000000
+Zy14$TPM3 <- Zy14$Zy14_3 / sum(Zy14$Zy14_3) * 1000000
+Zy14 <- Zy14[4:6]
+Zy14 %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0)
+
+# TPM conversion + average the three replicates, TPM, BC
+Zy24$TPM1 <- Zy24$Zy24_1 / sum(Zy24$Zy24_1) * 1000000
+Zy24$TPM2 <- Zy24$Zy24_2 / sum(Zy24$Zy24_2) * 1000000
+Zy24$TPM3 <- Zy24$Zy24_3 / sum(Zy24$Zy24_3) * 1000000
+Zy24 <- Zy24[4:6]
+Zy24 %<>% mutate(avg = rowMeans(.)) %>% filter(avg > 0)
+
+# logTPM conversion
+Zy14 %<>% mutate_if(is.numeric, logTPM) %>% .[4]
+dim(Zy14)
+Zy24 %<>% mutate_if(is.numeric, logTPM) %>% .[4]
+dim(Zy24)
+```
+
+## Couple PLT-bound-upregulated targets to AC, BC, QC, Mer, Elong, Mat, SAM and Zy14/24 log10 TPM-transformed datasets
+```{r}
+# Here we extract and merge the expression values of each PLT target gene to each tissue
+ACPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(AC, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- AC %>% rownames_to_column("row_names")
+ACexp <- merge(ACPLT_total, tmpexpression, by = "row_names")
+colnames(ACexp) <- c("AGI","AC")
+
+BCPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(BC, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- BC %>% rownames_to_column("row_names")
+BCexp <- merge(BCPLT_total, tmpexpression, by = "row_names")
+colnames(BCexp) <- c("AGI","BC")
+
+MerPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(Mer, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- Mer %>% rownames_to_column("row_names")
+Merexp <- merge(MerPLT_total, tmpexpression, by = "row_names")
+colnames(Merexp) <- c("AGI","Mer")
+
+ElongPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(Elong, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- Elong %>% rownames_to_column("row_names")
+Elongexp <- merge(ElongPLT_total, tmpexpression, by = "row_names")
+colnames(Elongexp) <- c("AGI","Elong")
+
+MatPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(Mat, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- Mat %>% rownames_to_column("row_names")
+Matexp <- merge(MatPLT_total, tmpexpression, by = "row_names")
+colnames(Matexp) <- c("AGI","Mat")
+
+WOX5PLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(WOX5, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- WOX5 %>% rownames_to_column("row_names")
+WOX5exp <- merge(WOX5PLT_total, tmpexpression, by = "row_names")
+colnames(WOX5exp) <- c("AGI","QC")
+
+SAM7DPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(SAM_7D, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- SAM_7D %>% rownames_to_column("row_names")
+SAM7Dexp <- merge(SAM7DPLT_total, tmpexpression, by = "row_names")
+colnames(SAM7Dexp) <- c("AGI","SAM")
+
+SAM14DPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(SAM_14D, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- SAM_14D %>% rownames_to_column("row_names")
+SAM14Dexp <- merge(SAM14DPLT_total, tmpexpression, by = "row_names")
+colnames(SAM14Dexp) <- c("AGI","SAM")
+
+SAM35DPLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(SAM_35D, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- SAM_35D %>% rownames_to_column("row_names")
+SAM35Dexp <- merge(SAM35DPLT_total, tmpexpression, by = "row_names")
+colnames(SAM35Dexp) <- c("AGI","SAM")
+
+Zy14PLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(Zy14, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- Zy14 %>% rownames_to_column("row_names")
+Zy14exp <- merge(Zy14PLT_total, tmpexpression, by = "row_names")
+colnames(Zy14exp) <- c("AGI","Zy14")
+
+Zy24PLT_total <- PLT_total %>%
+  rownames_to_column("row_names") %>%
+  semi_join(rownames_to_column(Zy24, "row_names"), by = "row_names") %>% .[1]
+tmpexpression <- Zy24 %>% rownames_to_column("row_names")
+Zy24exp <- merge(Zy24PLT_total, tmpexpression, by = "row_names")
+colnames(Zy24exp) <- c("AGI","Zy24")
+```
+
+## Couple 'all genes' to AC, BC, QC, Mer, Elong, Mat, SAM, and Zy14/24 log10 TPM-transformed datasets
+```{r}
+# Here we extract and merge the expression values of all genes to each tissue; necessary for later
+Mer_all <- Mer %>% rownames_to_column("AGI")
+colnames(Mer_all) <- c("AGI","Mer")
+Elong_all <- Elong %>% rownames_to_column("AGI")
+colnames(Elong_all) <- c("AGI","Elong")
+Mat_all <- Mat %>% rownames_to_column("AGI")
+colnames(Mat_all) <- c("AGI","Mat")
+AC_all <- AC %>% rownames_to_column("AGI")
+colnames(AC_all) <- c("AGI","AC")
+BC_all <- BC %>% rownames_to_column("AGI")
+colnames(BC_all) <- c("AGI","BC")
+WOX5_all <- WOX5 %>% rownames_to_column("AGI")
+colnames(WOX5_all) <- c("AGI","QC")
+SAM7D_all <- SAM_7D %>% rownames_to_column("AGI")
+colnames(SAM7D_all) <- c("AGI","SAM")
+SAM14D_all <- SAM_14D %>% rownames_to_column("AGI")
+colnames(SAM14D_all) <- c("AGI","SAM")
+SAM35D_all <- SAM_35D %>% rownames_to_column("AGI")
+colnames(SAM35D_all) <- c("AGI","SAM")
+Zy14_all <- Zy14 %>% rownames_to_column("AGI")
+colnames(Zy14_all) <- c("AGI","Zy14")
+Zy24_all <- Zy24 %>% rownames_to_column("AGI")
+colnames(Zy24_all) <- c("AGI","Zy24")
+```
+
+## Expression thresholds
+```{r}
+## Define thresholds for expression cut off based on log10 TPM density plots; cut off was selected at 0.75, just prior to the second 'peak' in density.
+
+logTPMthresh <- 0.75
+
+# PLT-bound and PLT-upregulated genes
+ACvenn <- ACexp %>% filter(AC > logTPMthresh)
+BCvenn <- BCexp %>% filter(BC > logTPMthresh)
+QCvenn <- WOX5exp %>% filter(QC > logTPMthresh)
+Mervenn <- Merexp %>% filter(Mer > logTPMthresh)
+Elongvenn <- Elongexp %>% filter(Elong > logTPMthresh)
+Matvenn <- Matexp %>% filter(Mat > logTPMthresh)
+SAM7Dvenn <- SAM7Dexp %>% filter(SAM > logTPMthresh)
+SAM14Dvenn <- SAM14Dexp %>% filter(SAM > logTPMthresh)
+SAM35Dvenn <- SAM35Dexp %>% filter(SAM > logTPMthresh)
+SAMtotvenn <- rbind(SAM7Dvenn, SAM14Dvenn, SAM35Dvenn) %>% select(AGI) %>% unique()
+Zy14venn <- Zy14exp %>% filter(Zy14 > logTPMthresh)
+Zy24venn <- Zy24exp %>% filter(Zy24 > logTPMthresh)
+
+# All genes
+ACvenn_all <- AC_all %>% filter(AC > logTPMthresh)
+BCvenn_all <- BC_all %>% filter(BC > logTPMthresh)
+QCvenn_all <- WOX5_all %>% filter(QC > logTPMthresh)
+Mervenn_all <- Mer_all %>% filter(Mer > logTPMthresh)
+Elongvenn_all <- Elong_all %>% filter(Elong > logTPMthresh)
+Matvenn_all <- Mat_all %>% filter(Mat > logTPMthresh)
+SAM7Dvenn_all <- SAM7D_all %>% filter(SAM > logTPMthresh)
+SAM14Dvenn_all <- SAM14D_all %>% filter(SAM > logTPMthresh)
+SAM35Dvenn_all <- SAM35D_all %>% filter(SAM > logTPMthresh)
+SAMtotvenn_all <- rbind(SAM7Dvenn_all, SAM14Dvenn_all, SAM35Dvenn_all) %>% select(AGI) %>% unique()
+Zy14venn_all <- Zy14_all %>% filter(Zy14 > logTPMthresh)
+Zy24venn_all <- Zy24_all %>% filter(Zy24 > logTPMthresh)
+```
+
+## PLT cumulative dosage; expression over pseudotime (protophloem lineage)
+```{r, fig.width = 3, fig.height = 3}
+# Make wide format; this code takes a while
+copy <- phloemsc %>% add_rownames("AGI")
+phloemsc_long <- gather(copy, Cell_ID, norm.counts, SLX_12100_i701_i502:SLX_17313_i729_i522, factor_key=TRUE)
+
+# Merge with pseudotime dataframe; this code takes a while so is deactivated by default
+phloem <- merge(phloemsc_long, phloem_pt, by = c("Cell_ID"))
+rm(phloemsc_long)
+phloem_filtered <- phloem %>% filter(Pseudotime_PSE != 'NA')
+rm(phloem)
+
+# AGI list
+Roszak2021_AGI_list <- phloem_filtered %>% select("AGI") %>% unique()
+
+# Make dataframe of all PLT AGIs
+PLT_df <- data.frame(c("AT3G20840","AT1G51190","AT5G10510","AT5G17430","AT5G57390","AT5G65510"))
+colnames(PLT_df) <- "AGI"
+
+# Merge with PLT dataframe
+cumul_PLT_input <- merge(PLT_df, phloem_filtered, by = "AGI")
+cumul_PLT_input %<>% group_by(Cell_ID, Pseudotime_PSE) %>% mutate(sum = sum(norm.counts)) %>% ungroup %>% select(Pseudotime_PSE, sum) %>% unique()
+
+# Perform binning with specific number of bins
+cumul_PLT_input_binned <- cumul_PLT_input %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  summarise(meansum = mean(sum), n = n()) %>%
+  filter(n > 1)
+cumul_PLT_input_binned$midpoint <- sapply(cumul_PLT_input_binned$Pseudotime_PSE, get_midpoint)
+
+# Plot
+ggplot(data = cumul_PLT_input_binned, aes(y = midpoint, x = meansum)) +
+  geom_point(color = "black", size = 0.5) +
+  geom_smooth(method = "loess",  level  = 0, color = "black", size = 0.5) +
+  ylab("Developmental pseudotime") +
+  xlab("Cumulative PLT transcript levels") +
+  ylim(0,90) +
+  prettify
+ggsave(paste(output_path,"plt_dosage.pdf",sep=""), width = 2.5, height = 5)
+```
+
+## PLT percent expressed; expression over pseudotime (protophloem lineage) (!!! mag weg)
+```{r}
+# Calculate total cells per bin (total = 758)
+phloem_filtered_cells <- phloem_filtered %>%
+  select(Cell_ID, Pseudotime_PSE) %>%
+  unique() %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  count() %>%
+  filter(n > 1)
+colnames(phloem_filtered_cells)[2] <- "total"
+
+## Count cells expressing any PLT per consensus time group, at least 2 cells per bin
+# Make dataframe of all PLT AGIs
+PLT_df <- data.frame(c("AT3G20840","AT1G51190","AT5G10510","AT5G17430","AT5G57390","AT5G65510"))
+colnames(PLT_df) <- "AGI"
+
+# Extract only PLT AGIs
+PLT_input <- merge(PLT_df, phloem_filtered, by = "AGI")
+
+# Filter out non-expressed PLTs and select unique cell IDs and pseudotime columns
+PLT_input %<>% filter(norm.counts > 5) %>% select(Cell_ID, Pseudotime_PSE) %>% unique()
+
+# Count PLT-expressing cells per bin
+PLT_input_binned <- PLT_input %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  count()
+colnames(PLT_input_binned)[2] <- "PLT_exp"
+
+# Merge total and PLT expressing counts per bin
+PLT_exp_binned <- merge(phloem_filtered_cells, PLT_input_binned, by = "Pseudotime_PSE", all = T)
+
+# Remove bins with only 1 cell and replace NA with 0 in the PLT_exp column
+PLT_exp_binned %<>% filter(total != "NA") %>%
+  mutate(PLT_exp = replace_na(PLT_exp, 0))
+
+# Get midpoint per bin
+PLT_exp_binned$midpoint <- sapply(PLT_exp_binned$Pseudotime_PSE, get_midpoint)
+
+# Calculate percentage of cells within group expressing any PLT per consensus time group
+PLT_exp_binned %<>% mutate(prop = PLT_exp / total * 100)
+
+# Plot
+ggplot(data = PLT_exp_binned, aes(y = midpoint, x = prop)) +
+  geom_point(color = "black", size = 0.5) +
+  geom_smooth(method = "loess",  level  = 0, color = "black", size = 0.5) +
+  ylab("Developmental pseudotime") +
+  xlab("Cumulative PLT transcript levels") +
+  ylim(0,90) +
+  prettify
+```
+
+## Expression over protophloem development, i.e. developmental pseudotime
+```{r, fig.width = 1, fig.height = 2}
+# Non-PLT-regulated genes (no peak, no upregulation); 29035
+agi_list <- phloem_filtered %>% select(AGI) %>% unique()
+colnames(overlap) <- "AGI"
+colnames(peak_list) <- "AGI"
+PLT_interactions <- rbind(PLT_list[1], peak_list) %>% unique()
+colnames(PLT_interactions) <- "AGI"
+anti_plt_list <- anti_join(agi_list, PLT_interactions, by = "AGI") # Use this for the no peak, no upregulation set
+anti_plt_sel <- merge(anti_plt_list, phloem_filtered, by = "AGI")
+input_anti_plt <- anti_plt_sel %>% filter(norm.counts > 5) %>% group_by(Cell_ID, Pseudotime_PSE) %>% count()
+input_anti_plt$prop <- input_anti_plt$n / 29035 * 100
+
+# Peaks only; 2406
+colnames(peak_list) <- "AGI"
+PLT_interactions <- peak_list %>% unique()
+colnames(PLT_interactions) <- "AGI"
+peak_plt_sel <- merge(PLT_interactions, phloem_filtered, by = "AGI")
+input_peak_plt <- peak_plt_sel %>% filter(norm.counts > 5) %>% group_by(Cell_ID, Pseudotime_PSE) %>% count()
+input_peak_plt$prop <- input_peak_plt$n / 2406 * 100
+
+# Upregulated genes only; 2046
+PLT_interactions <- PLT_list[1] %>% unique()
+colnames(PLT_interactions) <- "AGI"
+upregu_plt_sel <- merge(PLT_interactions, phloem_filtered, by = "AGI")
+input_upregu_plt <- upregu_plt_sel %>% filter(norm.counts > 5) %>% group_by(Cell_ID, Pseudotime_PSE) %>% count()
+input_upregu_plt$prop <- input_upregu_plt$n / 2046 * 100
+
+# Direct PLT-upregulated target genes [-4kb,+4kb]; 334
+phloem_sel <- merge(PLT_total, phloem_filtered, by = "AGI")
+input <- phloem_sel %>% filter(norm.counts > 5) %>% group_by(Cell_ID, Pseudotime_PSE) %>% count()
+input$prop <- input$n / 334 * 100
+
+# Perform binning with specific number of bins for each dataset, remove ranges with only one observation
+input_binned <- input %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  summarise(meanprop = mean(prop), n = n()) %>%
+  filter(n > 1)
+input_binned$midpoint <- sapply(input_binned$Pseudotime_PSE, get_midpoint)
+
+input_peak_plt_binned <- input_peak_plt %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  summarise(meanprop = mean(prop), n = n()) %>%
+  filter(n > 1)
+input_peak_plt_binned$midpoint <- sapply(input_peak_plt_binned$Pseudotime_PSE, get_midpoint)
+
+input_upregu_plt_binned <- input_upregu_plt %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  summarise(meanprop = mean(prop), n = n()) %>%
+  filter(n > 1)
+input_upregu_plt_binned$midpoint <- sapply(input_upregu_plt_binned$Pseudotime_PSE, get_midpoint)
+
+input_anti_plt_binned <- input_anti_plt %>%
+  group_by(Pseudotime_PSE = cut(Pseudotime_PSE, seq(-0.05, 87.05, 0.1))) %>%
+  summarise(meanprop = mean(prop), n = n()) %>%
+  filter(n > 1)
+input_anti_plt_binned$midpoint <- sapply(input_anti_plt_binned$Pseudotime_PSE, get_midpoint)
+
+## Plot all four datasets
+ggplot() +
+      geom_point(data = input_anti_plt_binned, aes(y = midpoint, x = meanprop), color = "#440154", size = 0.5) +
+      geom_point(data = input_peak_plt_binned, aes(y = midpoint, x = meanprop), color = "#1F968B", size = 0.5) +
+      geom_point(data = input_upregu_plt_binned, aes(y = midpoint, x = meanprop), color = "#39568C", size = 0.5) +
+      geom_point(data = input_binned, aes(y = midpoint, x = meanprop), color = "#73D055", size = 0.5) +
+      geom_smooth(data = input_anti_plt_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#440154", method = "loess", size = 0.5, level = 0) +
+      geom_smooth(data = input_peak_plt_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#1F968B", method = "loess", size = 0.5, level = 0) +
+      geom_smooth(data = input_upregu_plt_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#39568C", method = "loess", size = 0.5, level = 0) +
+      geom_smooth(data = input_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#73D055", method = "loess", size = 0.5, level = 0) +
+      xlim(0,75) +
+      ylim(0,90) +
+      ylab("Developmental pseudotime") +
+      xlab("Percentage of expressed genes") +
+      prettify
+ggsave(paste(output_path,"sc_targets_4.pdf",sep=""), width = 2.5, height = 5)
+
+# Plot only PLT-bound + upregulated vs non-PLT-bound + non-upregulated
+ggplot() +
+      geom_point(data = input_anti_plt_binned, aes(y = midpoint, x = meanprop), color = "#440154", size = 0.5) +
+      geom_point(data = input_binned, aes(y = midpoint, x = meanprop), color = "#73D055", size = 0.5) +
+      geom_smooth(data = input_anti_plt_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#440154", method = "loess", size = 0.5, level = 0) +
+      geom_smooth(data = input_binned, aes(y = midpoint, x = as.numeric(meanprop)), color = "#73D055", method = "loess", size = 0.5, level = 0) +
+      xlim(0,60) +
+      ylim(0,90) +
+      ylab("Developmental pseudotime") +
+      xlab("Percentage of expressed genes") +
+      prettify
+ggsave(paste(output_path,"sc_targets_2.pdf",sep=""), width = 2.5, height = 5)
+```
+
+## Statistics (comparing phl_stem/diff between datasets, top/bottom 10 cells in terms of pseudotime)
+```{r, fig.height = 5, fig.width = 2.5}
+# Here we select the ten most 'stem' or 'differentiated cells from the Roszak data.
+
+## Stem cells
+phl_stem_plt <- input %>%
+  ungroup() %>%
+  arrange(Pseudotime_PSE) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>%
+  mutate(dataset = "PLT") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_stem_plt$prop) # p-value = 0.6262
+
+phl_stem_anti <- input_anti_plt %>%
+  ungroup() %>%
+  arrange(Pseudotime_PSE) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>% 
+  mutate(dataset = "anti") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_stem_anti$prop) # p-value = 0.9506
+
+phl_stem_peak <- input_peak_plt %>%
+  ungroup() %>%
+  arrange(Pseudotime_PSE) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>% 
+  mutate(dataset = "peak") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_stem_peak$prop) # p-value = 0.7153
+
+phl_stem_upregu <- input_upregu_plt %>%
+  ungroup() %>%
+  arrange(Pseudotime_PSE) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>% 
+  mutate(dataset = "upregu") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_stem_upregu$prop) # p-value = 0.9080
+
+# Thus, all 'stem' data is normally distributed
+
+## Differentiated
+phl_diff_plt <- input %>%
+  ungroup() %>%
+  arrange(desc(Pseudotime_PSE)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>% 
+  mutate(dataset = "PLT") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_diff_plt$prop) # p-value = 0.499
+
+phl_diff_anti <- input_anti_plt %>%
+  ungroup() %>%
+  arrange(desc(Pseudotime_PSE)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>% 
+  mutate(dataset = "anti") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_diff_anti$prop) # p-value = 0.8173
+
+phl_diff_peak <- input_peak_plt %>%
+  ungroup() %>%
+  arrange(desc(Pseudotime_PSE)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>% 
+  mutate(dataset = "peak") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_diff_peak$prop) # p-value = 0.6747
+
+phl_diff_upregu <- input_upregu_plt %>%
+  ungroup() %>%
+  arrange(desc(Pseudotime_PSE)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>% 
+  mutate(dataset = "upregu") %>%
+  select(Cell_ID, tissue, prop, dataset)
+shapiro.test(phl_diff_upregu$prop) # p-value = 0.4837
+
+# Thus, all 'diff' data is normally distributed
+
+## Merge datasets
+stat_comp_phl_stem <- rbind(phl_stem_plt, phl_stem_anti, phl_stem_peak, phl_stem_upregu)
+stat_comp_phl_diff <- rbind(phl_diff_plt, phl_diff_anti, phl_diff_peak, phl_diff_upregu)
+
+## Pairwise t-tests (multiple t-tests with Bonferroni correction: are the different sets enriched over the non-PLT targets?)
+t_stem <- pairwise_t_test(data = stat_comp_phl_stem, prop ~ dataset, alternative = "less", p.adjust.method = "bonferroni", ref.group = "anti", pool.sd = FALSE)
+t_diff <- pairwise_t_test(data = stat_comp_phl_diff, prop ~ dataset, alternative = "less", p.adjust.method = "bonferroni", ref.group = "anti", pool.sd = FALSE)
+
+stat_comp_phl_stem$dataset <- factor(stat_comp_phl_stem$dataset, levels=c("PLT", "peak", "upregu","anti"))
+stat_comp_phl_diff$dataset <- factor(stat_comp_phl_diff$dataset, levels=c("PLT", "peak", "upregu","anti"))
+
+PLT <- expression("PLT-bound + PLT-upregulated")
+peaks <- expression("PLT-bound")
+upregu <- expression("PLT-upregulated")
+anti <- expression("non-PLT-bound + non-PLT-upregulated")
+
+# Plot all four 'stem' together
+ggplot(stat_comp_phl_stem) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset), position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,80) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,peaks,upregu,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,peaks,upregu,anti), values=c("#73D055","#1F968B","#39568C","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black","black","black"))
+ggsave(paste(output_path,"violin_stem_4.pdf",sep=""), width = 7, height = 7.5)
+
+# Plot all four 'diff' together
+ggplot(stat_comp_phl_diff) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset),   position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,80) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,peaks,upregu,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,peaks,upregu,anti), values=c("#73D055","#1F968B","#39568C","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black","black","black"))
+ggsave(paste(output_path,"violin_diff_4.pdf",sep=""), width = 7, height = 7.5)
+
+### Compare only bound+upregulated with non-bound-non-upregulated
+
+# No need to repeat Shapiro-Wilk test, see above.
+
+## Merge datasets
+stat_comp_phl_stem_2 <- rbind(phl_stem_plt, phl_stem_anti)
+stat_comp_phl_diff_2 <- rbind(phl_diff_plt, phl_diff_anti)
+
+# Welch's t-tests
+t.test(phl_stem_plt$prop, phl_stem_anti$prop, alternative = "greater") # p-value = 1.295e-10
+t.test(phl_diff_plt$prop, phl_diff_anti$prop, alternative = "greater") # p-value = 0.004126
+
+# Merge datasets
+stat_comp_phl_2 <- rbind(stat_comp_phl_stem_2,stat_comp_phl_diff_2) %>%
+  mutate(condition = paste(tissue, dataset, sep = '_'))
+stat_comp_phl_2$dataset <- factor(stat_comp_phl_2$dataset, levels=c("PLT","anti"))
+stat_comp_phl_2$condition <- factor(stat_comp_phl_2$condition, levels=c("stem_PLT","stem_anti", "diff_PLT", "diff_anti"))
+
+# Plot only bound+upregulated with non-bound-non-upregulated, all data together
+ggplot(stat_comp_phl_2) +
+  geom_violin(aes(x = condition, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = condition, y = prop, color = dataset), position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 0.5) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,90) +
+  prettify +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c("PLT","anti"), values=c("#73D055","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black"))
+ggsave(paste(output_path,"violin_stem_diff_2.pdf",sep=""), width = 2.5, height = 5)
+
+# Plot only bound+upregulated with non-bound-non-upregulated, diff
+ggplot(stat_comp_phl_stem_2) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset),   position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,80) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,anti), values=c("#73D055","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black"))
+ggsave(paste(output_path,"violin_stem_2.pdf",sep=""), width = 6, height = 7)
+
+# Plot only bound+upregulated with non-bound-non-upregulated, diff
+ggplot(stat_comp_phl_diff_2) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset),   position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,80) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,anti), values=c("#73D055","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black"))
+ggsave(paste(output_path,"violin_diff_2.pdf",sep=""), width = 6, height = 7)
+```
+
+# Check expression of Shahan scRNA 'Col-0' sample
+```{r}
+# Make Shahan data long format
+copy <- root_sc_col0_norm %>%
+  add_rownames("AGI")
+root_sc_col0_norm_long <- gather(copy, barcode, norm.counts, AAACCCAAGGATGTTA:TTTGTTGTCATTCTTG, factor_key=TRUE)
+rm(copy)
+rm(root_sc_col0_norm)
+
+# Make df of all barcodes
+root_sc_col0_barcodes <- root_sc_col0_norm_long %>%
+  select(barcode) %>% unique()
+
+# Count barcodes (= 6433)
+root_sc_col0_barcodes_count = root_sc_col0_barcodes %>%
+  count()
+
+# Filter out non-expressed genes
+root_sc_col0_norm_long %<>% filter(norm.counts > 0)
+
+# Define threshold
+sc_col0_tresh = 0.1
+
+# Apply threshold 
+root_sc_col0_norm_long %<>% filter(norm.counts > sc_col0_tresh)
+```
+
+## PLT expression over pseudotime (root tip lineages); Shahan Col-0
+```{r, fig.width = 10, fig.height = 10}
+# Create dataset-specific metadata
+shahan_meta_col0 <- shahan_meta %>%
+  filter(orig.ident == "col0") # 6433 barcodes
+shahan_meta_col0_overview <- shahan_meta_col0 %>%
+  group_by(celltype.anno, consensus.time.group) %>%
+  count()
+
+# Merge normalized expression data (long format) with pseudotime dataframe; this code takes a while so is deactivated by default
+atlas_col0 <- merge(root_sc_col0_norm_long, shahan_meta_col0, by = c("barcode"))
+rm(root_sc_col0_norm_long) # 6433 barcodes
+
+# Select barcodes expressing one or multiple PLT in atlas_col0
+atlas_col0_PLT <- atlas_col0 %>%
+  filter(AGI == "AT3G20840" | AGI == "AT1G51190" | AGI == "AT5G10510" | AGI == "AT5G17430" | AGI == "AT5G57390" | AGI == "AT5G65510")
+
+# Simplify barcodes to binary system: only once in this dataframe if any PLT is expressed and select useful columns
+atlas_col0_PLT %<>% select(barcode, celltype.anno, time.anno, consensus.time.group) %>%
+  unique()
+
+### Consensus time group ###
+# Count barcodes per consensus time group and celltype
+atlas_col0_PLT_cell_TG <- shahan_meta_col0 %>%
+  select(barcode, celltype.anno, consensus.time.group) %>%
+  group_by(celltype.anno, consensus.time.group) %>% count()
+colnames(atlas_col0_PLT_cell_TG)[3] <- "total"
+
+# Count cells expressing any PLT per consensus time group, at least total 5 cells in a time group
+atlas_col0_PLT_total <- merge(atlas_col0_PLT, atlas_col0_PLT_cell_TG)
+atlas_col0_PLT_total_counted <- atlas_col0_PLT_total %>%
+  select(celltype.anno, consensus.time.group, total) %>%
+  filter(total >= 5) %>% group_by(celltype.anno, consensus.time.group,total) %>%
+  count() 
+
+# Calculate percentage of cells within group expressing any PLT per consensus time group, at least total 5 cells in a time group
+anno_TG <- atlas_col0 %>% select(celltype.anno, consensus.time.group) %>%
+  unique()
+atlas_col0_PLT_cell_TG_filtered <- atlas_col0_PLT_cell_TG %>%
+  select(celltype.anno, consensus.time.group, total) %>%
+  filter(total >= 5)
+anno_total <- merge(atlas_col0_PLT_cell_TG_filtered, anno_TG, all = TRUE)
+atlas_col0_PLT_total_counted_complete <- merge(anno_total, atlas_col0_PLT_total_counted, all = TRUE) %>%
+  mutate(n = replace_na(n, 0)) %>%
+  mutate(prop = n / total * 100) %>%
+  filter(prop != "NA")
+
+# Plot with geom_path
+ggplot(data = atlas_col0_PLT_total_counted_complete, aes(y = consensus.time.group, x = prop)) +
+  geom_point(color = "black", size = 0.5) +
+  geom_path(aes(group = 1), color = "black", size = 0.3) +
+  #geom_smooth(aes(group = 1), method = "lm", formula = y ~ log(x+1), level = 0.95, color = "black", size = 0.5) +
+  ylab("Pseudotime group") +
+  xlab("Cells expressing PLT (%)") +
+  coord_cartesian(ylim = c(0,10)) +
+  facet_wrap(~ celltype.anno) +
+  prettify +
+  theme(strip.text.x = element_text(size = 12, color = "black"))
+ggsave(paste(output_path,"Shahan_Col0_percent_PLT.pdf",sep=""), width = 8, height = 9)
+```
+
+## PLT targets over developmental pseudotime; Shahan Col-0
+```{r}
+# Total unique AGIs in Col-0 data: 25261
+colnames(sc_col0_agi_list) <- "AGI"
+
+# Filter atlas_col0 for selected cell types
+#atlas_col0 %<>% filter(celltype.anno == "Atrichoblast" | celltype.anno == "Trichoblast" | celltype.anno == "Cortex" | celltype.anno == "Endodermis" | celltype.anno == "Columella" | celltype.anno == "Lateral Root Cap" | celltype.anno == "Quiescent Center")
+
+# Non-PLT-regulated genes (no peak, no upregulation); 21692
+colnames(overlap) <- "AGI"
+colnames(peak_list) <- "AGI"
+PLT_interactions <- rbind(PLT_list[1], peak_list) %>% unique()
+colnames(PLT_interactions) <- "AGI"
+anti_plt_list <- anti_join(sc_col0_agi_list, PLT_interactions, by = "AGI") # count this number for the non-PLT-regulated genes
+anti_plt_sel <- merge(anti_plt_list, atlas_col0, by = "AGI")
+input_anti_plt <- anti_plt_sel %>% group_by(barcode, celltype.anno, consensus.time.group) %>% count()
+input_anti_plt$prop <- input_anti_plt$n / 21692 * 100
+rm(anti_plt_sel)
+
+# Direct PLT-upregulated target genes [-4kb,+4kb]; 334
+col0_peak_upregu <- merge(PLT_total, atlas_col0, by = "AGI")
+input <- col0_peak_upregu %>% group_by(barcode, celltype.anno, consensus.time.group) %>% count()
+input$prop <- input$n / 334 * 100
+rm(col0_peak_upregu)
+
+# Bin per consensus time group (minimum of 5 cells)
+input_binned <- input %>% group_by(celltype.anno, consensus.time.group) %>% summarise(meanprop = mean(prop), n = n()) %>% filter(n >= 5)
+input_anti_plt_binned <- input_anti_plt %>% group_by(celltype.anno, consensus.time.group) %>% summarise(meanprop = mean(prop), n = n()) %>% filter(n >= 5)
+
+# Prepare for plotting
+input_anti_plt_binned$consensus.time.group <- ordered(input_anti_plt_binned$consensus.time.group, levels=c("T0","T1","T2","T3","T4","T5","T6","T7","T8","T9"))
+input_binned$consensus.time.group <- ordered(input_binned$consensus.time.group, levels=c("T0","T1","T2","T3","T4","T5","T6","T7","T8","T9"))
+
+# Plot PLT-bound + upregulated vs non-PLT-bound + non-upregulated
+ggplot() +
+      geom_path(data = input_anti_plt_binned, aes(y = factor(consensus.time.group), x = meanprop, group = 1), color = "#440154", size = 0.3) +
+      geom_path(data = input_binned, aes(y = factor(consensus.time.group), x = meanprop, group = 1), color = "#73D055", size = 0.3) +
+      geom_point(data = input_anti_plt_binned, aes(y = consensus.time.group, x = meanprop), color = "#440154", size = 0.5) +
+      geom_point(data = input_binned, aes(y = consensus.time.group, x = meanprop), color = "#73D055", size = 0.5) +
+      xlim(0,40) +
+      facet_wrap(~ celltype.anno) +
+      ylab("Pseudotime group") +
+      xlab("Percentage of expressed genes") +
+      prettify +
+      theme(strip.text.x = element_text(size = 12, color = "black"))
+ggsave(paste(output_path,"Shahan_Col0_percent_target_anti.pdf",sep=""), width = 8, height = 9)
+```
+
+## Statistics (comparing time groups); Shahan Col-0
+```{r, fig.height = 4, fig.width = 3}
+# First calculate proportions of expressed PLT targets/non-PLT targets in each cell
+anti_plt_sel <- merge(anti_plt_list, atlas_col0, by = "AGI")
+input_anti_plt<- anti_plt_sel %>%
+  select(barcode, AGI, celltype.anno, consensus.time) %>%
+  group_by(barcode, celltype.anno, consensus.time) %>%
+  count() %>% mutate(prop = n / 21692 * 100)
+rm(anti_plt_sel)
+
+col0_peak_upregu <- merge(PLT_total, atlas_col0, by = "AGI")
+input <- col0_peak_upregu %>%
+  select(barcode, AGI, celltype.anno, consensus.time) %>% group_by(barcode, celltype.anno, consensus.time) %>%
+  count() %>%
+  mutate(prop = n / 334 * 100)
+rm(col0_peak_upregu)
+
+# Here we select the 10 cells with the lowest and highest developmental pseudotime for each tissue annotation
+# Stem cells
+col0_stem_plt <- input %>%
+  ungroup() %>%
+  filter(celltype.anno == "Atrichoblast" | celltype.anno == "Cortex" | celltype.anno == "Endodermis" | celltype.anno == "Columella" | celltype.anno == "Lateral Root Cap" | celltype.anno == "Quiescent Center") %>%
+  group_by(celltype.anno) %>%
+  arrange(consensus.time) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>%
+  mutate(dataset = "PLT") %>%
+  select(celltype.anno, tissue, prop, dataset)
+
+col0_stem_anti <- input_anti_plt %>%
+  ungroup() %>%
+  filter(celltype.anno == "Atrichoblast" | celltype.anno == "Cortex" | celltype.anno == "Endodermis" | celltype.anno == "Columella" | celltype.anno == "Lateral Root Cap" | celltype.anno == "Quiescent Center") %>%
+  group_by(celltype.anno) %>%
+  arrange(consensus.time) %>%
+  slice(1:10) %>%
+  mutate(tissue = "stem") %>%
+  mutate(dataset = "anti") %>%
+  select(celltype.anno, tissue, prop, dataset)
+
+# Check normality for all stem tissue types
+col0_stem_plt_atr <- col0_stem_plt %>% filter(celltype.anno == "Atrichoblast")
+shapiro.test(col0_stem_plt_atr$prop) # p-value = 0.4838
+col0_stem_plt_cor <- col0_stem_plt %>% filter(celltype.anno == "Cortex")
+shapiro.test(col0_stem_plt_cor$prop) # p-value = 0.004281
+col0_stem_plt_end <- col0_stem_plt %>% filter(celltype.anno == "Endodermis")
+shapiro.test(col0_stem_plt_end$prop) # p-value = 0.0409
+col0_stem_plt_col <- col0_stem_plt %>% filter(celltype.anno == "Columella")
+shapiro.test(col0_stem_plt_col$prop) # p-value = 0.1151
+col0_stem_plt_lrc <- col0_stem_plt %>% filter(celltype.anno == "Lateral Root Cap")
+shapiro.test(col0_stem_plt_lrc$prop) # p-value = 0.1999
+col0_stem_plt_qc <- col0_stem_plt %>% filter(celltype.anno == "Quiescent Center")
+shapiro.test(col0_stem_plt_qc$prop) # p-value = 0.7007
+
+# Check normality for all stem-anti tissue types
+col0_stem_anti_atr <- col0_stem_anti %>% filter(celltype.anno == "Atrichoblast")
+shapiro.test(col0_stem_anti_atr$prop) # p-value = 0.1726
+col0_stem_anti_cor <- col0_stem_anti %>% filter(celltype.anno == "Cortex")
+shapiro.test(col0_stem_anti_cor$prop) # p-value = 0.03705
+col0_stem_anti_end <- col0_stem_anti %>% filter(celltype.anno == "Endodermis")
+shapiro.test(col0_stem_anti_end$prop) # p-value = 0.01509
+col0_stem_anti_col <- col0_stem_anti %>% filter(celltype.anno == "Columella")
+shapiro.test(col0_stem_anti_col$prop) # p-value = 0.7797
+col0_stem_anti_lrc <- col0_stem_anti %>% filter(celltype.anno == "Lateral Root Cap")
+shapiro.test(col0_stem_anti_lrc$prop) # p-value = 0.4611
+col0_stem_anti_qc <- col0_stem_anti %>% filter(celltype.anno == "Quiescent Center")
+shapiro.test(col0_stem_anti_qc$prop) # p-value = 0.8325
+
+# Thus, for the stem set, use t-tests for all, except the cortex and endodermis.
+
+## Differentiated cells
+col0_diff_plt <- input %>%
+  ungroup() %>%
+  filter(celltype.anno == "Atrichoblast" | celltype.anno == "Cortex" | celltype.anno == "Endodermis" | celltype.anno == "Columella" | celltype.anno == "Lateral Root Cap" | celltype.anno == "Quiescent Center") %>%
+  filter(celltype.anno != "Quiescent Center") %>%
+  group_by(celltype.anno) %>%
+  arrange(desc(consensus.time)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>%
+  mutate(dataset = "PLT") %>%
+  select(celltype.anno, tissue, prop, dataset)
+
+col0_diff_anti <- input_anti_plt %>%
+  ungroup() %>%
+  filter(celltype.anno == "Atrichoblast" | celltype.anno == "Cortex" | celltype.anno == "Endodermis" | celltype.anno == "Columella" | celltype.anno == "Lateral Root Cap" | celltype.anno == "Quiescent Center") %>%
+  filter(celltype.anno != "Quiescent Center") %>%
+  group_by(celltype.anno) %>%
+  arrange(desc(consensus.time)) %>%
+  slice(1:10) %>%
+  mutate(tissue = "diff") %>%
+  mutate(dataset = "anti") %>%
+  select(celltype.anno, tissue, prop, dataset)
+
+# Check normality for all stem tissue types
+col0_diff_plt_atr <- col0_diff_plt %>% filter(celltype.anno == "Atrichoblast")
+shapiro.test(col0_diff_plt_atr$prop) # p-value = 0.2489
+col0_diff_plt_cor <- col0_diff_plt %>% filter(celltype.anno == "Cortex")
+shapiro.test(col0_diff_plt_cor$prop) # p-value = 0.03492
+col0_diff_plt_end <- col0_diff_plt %>% filter(celltype.anno == "Endodermis")
+shapiro.test(col0_diff_plt_end$prop) # p-value = 0.7943
+col0_diff_plt_col <- col0_diff_plt %>% filter(celltype.anno == "Columella")
+shapiro.test(col0_diff_plt_col$prop) # p-value = 0.3328
+col0_diff_plt_lrc <- col0_diff_plt %>% filter(celltype.anno == "Lateral Root Cap")
+shapiro.test(col0_diff_plt_lrc$prop) # p-value = 0.3511
+
+# Check normality for all diff tissue types
+col0_diff_anti_atr <- col0_diff_anti %>% filter(celltype.anno == "Atrichoblast")
+shapiro.test(col0_diff_anti_atr$prop) # p-value = 0.4171
+col0_diff_anti_cor <- col0_diff_anti %>% filter(celltype.anno == "Cortex")
+shapiro.test(col0_diff_anti_cor$prop) # p-value = 0.5105
+col0_diff_anti_end <- col0_diff_anti %>% filter(celltype.anno == "Endodermis")
+shapiro.test(col0_diff_anti_end$prop) # p-value = 0.1459
+col0_diff_anti_col <- col0_diff_anti %>% filter(celltype.anno == "Columella")
+shapiro.test(col0_diff_anti_col$prop) # p-value = 0.9708
+col0_diff_anti_lrc <- col0_diff_anti %>% filter(celltype.anno == "Lateral Root Cap")
+shapiro.test(col0_diff_anti_lrc$prop) # p-value = 0.1922
+
+# Thus, for the diff set, use t-tests for all, except the cortex.
+
+## Merge datasets and order levels
+stat_comp_col0_stem <- rbind(col0_stem_plt, col0_stem_anti)
+stat_comp_col0_diff <- rbind(col0_diff_plt, col0_diff_anti)
+
+## Split sets for Welch's t-test or Wilcoxon test
+stat_comp_col0_stem_t <- stat_comp_col0_stem %>% filter(celltype.anno != "Cortex" & celltype.anno != "Endodermis")
+stat_comp_col0_stem_w <- stat_comp_col0_stem %>% filter(celltype.anno == "Cortex" | celltype.anno == "Endodermis")
+stat_comp_col0_diff_t <- stat_comp_col0_diff %>% filter(celltype.anno != "Cortex")
+stat_comp_col0_diff_w <- stat_comp_col0_diff %>% filter(celltype.anno == "Cortex")
+
+## Pairwise tests (test if there is indeed more expression of PLT target genes in the less differentiated cells; levels "PLT" and "anti" are inverted, hence alternative = "less")
+
+t_col0_stem <- stat_comp_col0_stem_t %>%
+  group_by(celltype.anno) %>%
+  t_test(prop ~ dataset, alternative = "less") %>%
+  select(celltype.anno, group1, group2, n1, n2, p)
+
+w_col0_stem <- stat_comp_col0_stem_w %>%
+  group_by(celltype.anno) %>%
+  wilcox_test(prop ~ dataset, alternative = "less") %>%
+  select(celltype.anno, group1, group2, n1, n2, p)
+
+t_col0_diff <- stat_comp_col0_diff_t %>%
+  group_by(celltype.anno) %>%
+  t_test(prop ~ dataset, alternative = "less") %>%
+  select(celltype.anno, group1, group2, n1, n2, p)
+
+w_col0_diff <- stat_comp_col0_diff_w %>%
+  group_by(celltype.anno) %>%
+  wilcox_test(prop ~ dataset, alternative = "less") %>%
+  select(celltype.anno, group1, group2, n1, n2, p)
+
+col0_tests_stem <- rbind(t_col0_stem, w_col0_stem)
+col0_tests_diff <- rbind(t_col0_diff, w_col0_diff)
+
+# Expressions
+PLT <- expression("PLT-bound + PLT-upregulated")
+anti <- expression("non-PLT-bound + non-PLT-upregulated")
+
+stat_comp_col0_stem$dataset <- factor(stat_comp_col0_stem$dataset, levels=c("PLT","anti"))
+stat_comp_col0_diff$dataset <- factor(stat_comp_col0_diff$dataset, levels=c("PLT","anti"))
+
+# Plot only bound+upregulated with non-bound-non-upregulated stem (10 most stem-like cells)
+ggplot(stat_comp_col0_stem) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset), position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Expressed genes (%)") +
+  ylim(0,80) +
+  facet_wrap(~celltype.anno) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,anti), values=c("#73D055","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black")) +
+  theme(strip.text.x = element_text(size = 12, color = "black"))
+ggsave(paste(output_path,"Shahan_Col0_violin_stem.pdf",sep=""), width = 8, height = 9)
+
+# Plot only bound+upregulated with non-bound-non-upregulated (10 most differentiated cells)
+ggplot(stat_comp_col0_diff) +
+  geom_violin(aes(x = dataset, y = prop, fill = dataset), color = "black", scale="width") +
+  geom_jitter(aes(x = dataset, y = prop, color = dataset),   position=position_jitterdodge(jitter.width = 0.2, jitter.height = 0), size = 1) +
+  xlab("") +
+  ylab("Percentage of expressed genes") +
+  ylim(0,80) +
+  facet_wrap(~celltype.anno) +
+  prettify +
+  scale_x_discrete(labels = c(PLT,anti)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  scale_fill_manual(name="", labels = c(PLT,anti), values=c("#73D055","#440154")) +
+  scale_color_manual(name="", labels = c("","","","",""),values=c("black","black")) +
+  theme(strip.text.x = element_text(size = 12, color = "black"))
+ggsave(paste(output_path,"Shahan_Col0_violin_diff.pdf",sep=""), width = 8, height = 9)
+```
+
+# Set definitions for early and late phloem lineage cells
+```{r}
+## Define early and late phloem cells
+cell_nr_early <- phloem_sel %>%
+  filter(Pseudotime_PSE <= 1 & norm.counts > 5) %>%
+  select(Cell_ID) %>%
+  unique() %>%
+  count() %>%
+  as.numeric()
+
+cell_nr_late <- phloem_sel %>%
+  filter(Pseudotime_PSE >= 86 & norm.counts > 5) %>%
+  select(Cell_ID) %>%
+  unique() %>%
+  count() %>%
+  as.numeric()
+
+## Filter for expression of a gene in at least 10% of cells
+phloem_early <- phloem_sel %>%
+  filter(Pseudotime_PSE <= 1 & norm.counts > 5) %>%
+  select(AGI, Cell_ID) %>%
+  mutate(stage = "early") %>%
+  select(AGI, stage) %>%
+  group_by(AGI, stage) %>%
+  summarize(count=n()) %>%
+  mutate(prop = count/cell_nr_early) %>%
+  filter(prop >= 0.1)
+  
+phloem_late <- phloem_sel %>%
+  filter(Pseudotime_PSE >= 86 & norm.counts > 5) %>%
+  select(AGI, Cell_ID) %>%
+  mutate(stage = "late") %>%
+  select(AGI, stage) %>%
+  group_by(AGI, stage) %>%
+  summarize(count=n()) %>%
+  mutate(prop = count/cell_nr_late) %>%
+  filter(prop >= 0.1)
+```
+
+# Set definitions for early and late protophloem lineage cells; any PLTs
+```{r}
+cell_nr_early <- phloem_filtered %>%
+  filter(Pseudotime_PSE <= 1 & norm.counts > 5) %>%
+  select(Cell_ID) %>%
+  unique() %>%
+  count() %>%
+  as.numeric()
+
+cell_nr_late <- phloem_filtered %>%
+  filter(Pseudotime_PSE >= 86 & norm.counts > 5) %>%
+  select(Cell_ID) %>%
+  unique() %>%
+  count() %>%
+  as.numeric()
+
+## Filter for expression of a gene in at least 10% of cells
+phloem_early_all <- phloem_filtered %>%
+  filter(Pseudotime_PSE <= 1 & norm.counts > 5) %>%
+  select(AGI, Cell_ID) %>%
+  mutate(stage = "early") %>%
+  select(AGI, stage) %>%
+  group_by(AGI, stage) %>%
+  summarize(count=n()) %>%
+  mutate(prop = count/cell_nr_early) %>%
+  filter(prop >= 0.1)
+  
+phloem_late_all <- phloem_filtered %>%
+  filter(Pseudotime_PSE >= 86 & norm.counts > 5) %>%
+  select(AGI, Cell_ID) %>%
+  mutate(stage = "late") %>%
+  select(AGI, stage) %>%
+  group_by(AGI, stage) %>%
+  summarize(count=n()) %>%
+  mutate(prop = count/cell_nr_late) %>%
+  filter(prop >= 0.1)
+```
+
+## Build PLT regulome core
+```{r}
+# Compile lists of genes for Venns
+data.list <- list(SAM = as.matrix(SAMtotvenn$AGI),
+                  QC = as.matrix(QCvenn$AGI),
+                  Phl_stem = as.matrix(phloem_early$AGI),
+                  Mer = as.matrix(Mervenn$AGI),
+                  Elo = as.matrix(Elongvenn$AGI),
+                  Mat = as.matrix(Matvenn$AGI),
+                  Phl_diff = as.matrix(phloem_late$AGI),
+                  AC = as.matrix(ACvenn$AGI),
+                  BC = as.matrix(BCvenn$AGI),
+                  Zy24 = as.matrix(Zy24venn$AGI),
+                  Zy14 = as.matrix(Zy14venn$AGI))
+
+Phl_stem = as.matrix(phloem_early$AGI)
+Mer = as.matrix(Mervenn$AGI)
+QC = as.matrix(QCvenn$AGI)
+Phl_diff = as.matrix(phloem_late$AGI)
+Mat = as.matrix(Matvenn$AGI)
+Elo = as.matrix(Elongvenn$AGI)
+SAM = as.matrix(SAMtotvenn$AGI)
+AC = as.matrix(ACvenn$AGI)
+BC = as.matrix(BCvenn$AGI)
+Zy24 = as.matrix(Zy24venn$AGI)
+Zy14 = as.matrix(Zy14venn$AGI)
+
+ggvenn(data.list, c("Mer","QC","SAM"), show_percentage = F, text_size = 5, fill_color = c("#bedddc","#fce9c7","#e2a6a6"))
+ggsave(paste(output_path,"core_venn.pdf",sep=""), width = 5, height = 5)
+```
+
+## Define early and late Shahan Col-0 cells
+```{r}
+## Define early and late phloem cells (time groups T0 and T1 are considered 'early', and time groups T8 and T9 are considered 'late')
+cell_nr_early <- atlas_col0 %>%
+  select(barcode, celltype.anno, consensus.time.group) %>%
+  filter(consensus.time.group == "T0" | consensus.time.group == "T1") %>%
+  group_by(celltype.anno) %>%
+  unique() %>%
+  summarize(total=n())
+
+cell_nr_late <- atlas_col0 %>%
+  select(barcode, celltype.anno, consensus.time.group) %>%
+  filter(consensus.time.group == "T8" | consensus.time.group == "T9") %>%
+  group_by(celltype.anno) %>%
+  unique() %>%
+  summarize(total=n())
+
+## Filter for expression of a gene in at least 10% of cells
+col0_early <- atlas_col0 %>%
+  filter(consensus.time.group == "T0" | consensus.time.group == "T1") %>%
+  select(AGI, celltype.anno, barcode) %>%
+  group_by(AGI, celltype.anno) %>%
+  summarize(count=n())
+col0_early_merged <- merge(col0_early, cell_nr_early, by = "celltype.anno") %>% 
+  mutate(prop = count/total) %>%
+  filter(prop >= 0.1)
+
+col0_late <- atlas_col0 %>%
+  filter(consensus.time.group == "T8" | consensus.time.group == "T9") %>%
+  select(AGI, celltype.anno, barcode) %>%
+  group_by(AGI, celltype.anno) %>%
+  summarize(count=n())
+col0_late_merged <- merge(col0_late, cell_nr_late, by = "celltype.anno") %>% 
+  mutate(prop = count/total) %>%
+  filter(prop >= 0.1)
+```
+
+## Check how much of the core is expressed
+```{r, fig.width = 3, fig.height = 1.2}
+core_stem_PLT_targets <- intersect(QC, intersect(SAM, Mer)) %>% as.data.frame()
+write.table(core_stem_PLT_targets, file=paste(output_path,"core_stem_PLT_targets.txt",sep = ""))
+
+colnames(core_stem_PLT_targets)[1] <- "AGI"
+
+data.list <- list(core = as.matrix(core_stem_PLT_targets$AGI),
+                  Phl_diff = as.matrix(phloem_late$AGI),
+                  Phl_stem = as.matrix(phloem_early$AGI),
+                  Mat = as.matrix(Matvenn$AGI),
+                  Elo = as.matrix(Elongvenn$AGI),
+                  AC = as.matrix(ACvenn$AGI),
+                  BC = as.matrix(BCvenn$AGI),
+                  Zy24 = as.matrix(Zy24venn$AGI),
+                  Zy14 = as.matrix(Zy14venn$AGI))
+
+ggvenn(data.list, c("core","AC"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","BC"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Phl_stem"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Elo"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Mat"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Phl_diff"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Zy14"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","Zy24"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+
+core_overlap <- data.frame(
+ tissue = c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff"),
+ overlap = c(134,139,149,142,184,163,123,32)
+)
+core_overlap$prop <- core_overlap$overlap / 197 * 100
+core_overlap$type <- "core"
+core_overlap$total <- "N/A"
+core_overlap$tissue <- factor(core_overlap$tissue, levels=c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff"))
+
+ggplot() +
+  geom_bar(data = core_overlap, aes(x = tissue, y = prop), fill = "#ededed", color = "black",stat = "identity") +
+  ylim(0,100) +
+  xlab("") +
+  ylab("Percentage shared with core") +
+  prettify +
+  scale_x_discrete(labels = rev(c("Phloem diff. cell", "Root mat. zone", "Root elo. zone", "Phloem stem cell", "Apical cell embryo", "Basal cell embryo", "24 HAP zygote", "14 HAP zygote"))) +
+  coord_flip()
+ggsave(paste(output_path,"core_overlap.pdf",sep=""), width = 6, height = 3)
+
+# Which zygote, AC and BC genes overlap with the core network?
+core_AC_PLT_targets <- intersect(ACvenn$AGI, core_stem_PLT_targets$AGI) %>% as.data.frame()
+colnames(core_AC_PLT_targets)[1] <- "AGI"
+write.table(core_AC_PLT_targets, file=paste(output_path,"core_AC_PLT_targets.txt",sep = ""))
+core_BC_PLT_targets <- intersect(BCvenn$AGI, core_stem_PLT_targets$AGI) %>% as.data.frame()
+colnames(core_BC_PLT_targets)[1] <- "AGI"
+write.table(core_BC_PLT_targets, file=paste(output_path,"core_BC_PLT_targets.txt",sep = ""))
+core_Zy14_PLT_targets <- intersect(Zy14venn$AGI, core_stem_PLT_targets$AGI) %>% as.data.frame()
+colnames(core_Zy14_PLT_targets)[1] <- "AGI"
+write.table(core_Zy14_PLT_targets, file=paste(output_path,"core_Zy14_PLT_targets.txt",sep = ""))
+core_Zy24_PLT_targets <- intersect(Zy24venn$AGI, core_stem_PLT_targets$AGI) %>% as.data.frame()
+colnames(core_Zy24_PLT_targets)[1] <- "AGI"
+write.table(core_Zy24_PLT_targets, file=paste(output_path,"core_Zy24_PLT_targets.txt",sep = ""))
+```
+
+# Anticore for the different datasets
+```{r}
+# Anticore for the different datasets:
+
+# Roots (Mer, Elong, Mat, QC): Li2016_AGI_list (26934)
+
+# SAM: Gutzat2020_AGI_list (38194)
+
+# AC/BC: Zhou_AGI_list (32399)
+
+# Protophloem: Roszak2021_AGI_list (32824)
+
+# Zygotes; TAIR10_AGI_list (33405)
+
+anticore_Li <- anti_join(Li2016_AGI_list, core_stem_PLT_targets, by = "AGI")
+anticore_Zhou <- anti_join(Zhou2020_AGI_list, core_stem_PLT_targets, by = "AGI")
+anticore_Zhao <- anti_join(TAIR10_AGI_list, core_stem_PLT_targets, by = "AGI")
+anticore_Roszak <- anti_join(Roszak2021_AGI_list, core_stem_PLT_targets, by = "AGI")
+
+data.list <- list(anticore_Li = as.matrix(anticore_Li$AGI),
+                  anticore_Zhou = as.matrix(anticore_Zhou$AGI),
+                  anticore_Zhao = as.matrix(anticore_Zhao$AGI),
+                  anticore_Roszak = as.matrix(anticore_Roszak$AGI),
+                  Phl_diff = as.matrix(phloem_late_all$AGI),
+                  Phl_stem = as.matrix(phloem_early_all$AGI),
+                  Mat = as.matrix(Matvenn_all$AGI),
+                  Elo = as.matrix(Elongvenn_all$AGI),
+                  AC = as.matrix(ACvenn_all$AGI),
+                  BC = as.matrix(BCvenn_all$AGI),
+                  Zy24 = as.matrix(Zy24venn_all$AGI),
+                  Zy14 = as.matrix(Zy14venn_all$AGI))
+
+ggvenn(data.list, c("anticore_Li","Elo"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Li","Mat"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Zhou","AC"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Zhou","BC"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Roszak","Phl_diff"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Roszak","Phl_stem"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Zhao","Zy14"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore_Zhao","Zy24"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+
+anticore_overlap <- data.frame(
+ tissue = c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff"),
+ overlap = c(14018,12763,12384,12100,13155,13277,12961,4296)
+)
+
+# Merge dataframes to divide by total genes used in previous studies
+total_genes <- data.frame(
+  tissue = c("Zy14","Zy24","Elo", "Mat", "AC", "BC", "Phl_stem", "Phl_diff"),
+  total = c(33405, 33405, 26737, 26737, 32202, 32202, 32627, 32627)
+)
+anticore_overlap_merged <- merge(anticore_overlap, total_genes) %>% mutate(prop = overlap/total*100, type = "anticore")
+
+# Merge core and anticore dataframes
+merged <- rbind(core_overlap, anticore_overlap_merged)
+merged$tissue <- factor(merged$tissue, levels=c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff"))
+merged$type <- factor(merged$type, levels=c("core","anticore"))
+
+# Plot
+ggplot() +
+  geom_bar(data = merged, aes(x = tissue, y = prop, fill = type), color = "black", position = "dodge", stat = "identity") +
+  ylim(0,100) +
+  xlab("") +
+  ylab("Percentage shared") +
+  prettify +
+  scale_x_discrete(labels = rev(c("Phloem diff. cell", "Root mat. zone", "Root elo. zone", "Phloem stem cell", "Apical cell embryo", "Basal cell embryo","Zygote 24 HAP", "Zygote 14 HAP"))) +
+  coord_flip() +
+  scale_fill_manual(values = c("#73D055", "#440154"))
+
+ggsave(paste(output_path,"anticore_overlap.pdf",sep=""), width = 6, height = 3)
+```
+
+## Core analysis for the Shahan data
+```{r}
+atr_t0 <- col0_early_merged %>% filter(celltype.anno == "Atrichoblast")
+col_t0 <- col0_early_merged %>% filter(celltype.anno == "Columella")
+cor_t0 <- col0_early_merged %>% filter(celltype.anno == "Cortex")
+end_t0 <- col0_early_merged %>% filter(celltype.anno == "Endodermis")
+lrc_t0 <- col0_early_merged %>% filter(celltype.anno == "Lateral Root Cap")
+qc_t0 <- col0_early_merged %>% filter(celltype.anno == "Quiescent Center")
+
+atr_t9 <- col0_late_merged %>% filter(celltype.anno == "Atrichoblast")
+col_t9 <- col0_late_merged %>% filter(celltype.anno == "Columella")
+cor_t9 <- col0_late_merged %>% filter(celltype.anno == "Cortex")
+end_t9 <- col0_late_merged %>% filter(celltype.anno == "Endodermis")
+lrc_t9 <- col0_late_merged %>% filter(celltype.anno == "Lateral Root Cap")
+
+data.list <- list(core = as.matrix(core_stem_PLT_targets$AGI),
+                  atr_t0 = as.matrix(atr_t0$AGI),
+                  col_t0 = as.matrix(col_t0$AGI),
+                  cor_t0 = as.matrix(cor_t0$AGI),
+                  end_t0 = as.matrix(end_t0$AGI),
+                  lrc_t0 = as.matrix(lrc_t0$AGI),
+                  qc_t0 = as.matrix(qc_t0$AGI),
+                  atr_t9 = as.matrix(atr_t9$AGI),
+                  col_t9 = as.matrix(col_t9$AGI),
+                  cor_t9 = as.matrix(cor_t9$AGI),                
+                  end_t9 = as.matrix(end_t9$AGI),
+                  lrc_t9 = as.matrix(lrc_t9$AGI))
+
+ggvenn(data.list, c("core","atr_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","col_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","cor_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","end_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","lrc_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","qc_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","atr_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","col_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","cor_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","end_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("core","lrc_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+
+core_overlap <- data.frame(
+ tissue = c("atr_t0","col_t0","cor_t0","end_t0","lrc_t0","qc_t0","atr_t9","col_t9","cor_t9","end_t9","lrc_t9"),
+ overlap = c(155,141,179,165,151,161,55,52,74,71,80)
+)
+core_overlap$prop <- core_overlap$overlap / 197 * 100
+core_overlap$type <- "core"
+core_overlap$tissue <- factor(core_overlap$tissue, levels=c("qc_t0","atr_t0","atr_t9","col_t0","col_t9","cor_t0","cor_t9","end_t0","end_t9","lrc_t0","lrc_t9"))
+
+ggplot() +
+  geom_bar(data = core_overlap, aes(x = tissue, y = prop), fill = "#ededed", color = "black",stat = "identity") +
+  ylim(0,100) +
+  xlab("") +
+  ylab("Percentage shared with core") +
+  prettify +
+  coord_flip()
+ggsave(paste(output_path,"shahan_col0_core_overlap.pdf",sep=""), width = 6, height = 2)
+```
+
+# Anticore for the Shahan data
+```{r}
+anticore <- anti_join(sc_col0_agi_list, core_stem_PLT_targets, by = "AGI") # 25065 are all non-core genes that are in the Shahan Col0 dataset.
+
+data.list <- list(anticore = as.matrix(sc_col0_agi_list$AGI),
+                  atr_t0 = as.matrix(atr_t0$AGI),
+                  col_t0 = as.matrix(col_t0$AGI),
+                  cor_t0 = as.matrix(cor_t0$AGI),
+                  end_t0 = as.matrix(end_t0$AGI),
+                  lrc_t0 = as.matrix(lrc_t0$AGI),
+                  qc_t0 = as.matrix(qc_t0$AGI),
+                  atr_t9 = as.matrix(atr_t9$AGI),
+                  col_t9 = as.matrix(col_t9$AGI),
+                  cor_t9 = as.matrix(cor_t9$AGI),                
+                  end_t9 = as.matrix(end_t9$AGI),
+                  lrc_t9 = as.matrix(lrc_t9$AGI))
+
+ggvenn(data.list, c("anticore","atr_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","col_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","cor_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","end_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","lrc_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","qc_t0"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","atr_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","col_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","cor_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","end_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+ggvenn(data.list, c("anticore","lrc_t9"), show_percentage = F, text_size = 7, fill_color = c("#A7BED3","#F1FFC4"))
+
+anticore_overlap <- data.frame(
+ tissue = c("atr_t0","col_t0","cor_t0","end_t0","lrc_t0","qc_t0","atr_t9","col_t9","cor_t9","end_t9","lrc_t9"),
+ overlap = c(11399,10387,11619,9845,11338,10791,7238,6421,8413,7281,7918)
+)
+anticore_overlap$prop <- anticore_overlap$overlap / 25065 * 100
+anticore_overlap$type <- "anticore"
+
+# Merge core and anticore dataframes
+merged <- rbind(core_overlap, anticore_overlap)
+merged$tissue <- factor(merged$tissue, levels=c("qc_t0","atr_t0","atr_t9","col_t0","col_t9","cor_t0","cor_t9","end_t0","end_t9","lrc_t0","lrc_t9"))
+merged$type <- factor(merged$type, levels=c("core","anticore"))
+
+# Plot
+ggplot() +
+  geom_bar(data = merged, aes(x = tissue, y = prop, fill = type), color = "black", position = "dodge", stat = "identity") +
+ # geom_bar(data = anticore_overlap_merged, aes(x = tissue, y = prop), fill = "#440154", color = "black",stat = "identity") +
+  ylim(0,100) +
+  xlab("") +
+  ylab("Percentage shared") +
+  prettify +
+  scale_x_discrete(labels = rev(c("LRC diff.", "LRC stem", "Endodermis diff.", "Endodermis stem", "Cortex diff.", "Cortex stem", "Columella diff.", "Columella stem", "Atrichoblast diff.", "Atrichoblast stem", "QC"))) +
+  coord_flip() +
+  scale_fill_manual(values = c("#73D055", "#440154"))
+
+ggsave(paste(output_path,"shahan_col0_anticore_overlap.pdf",sep=""), width = 6, height = 3.5)
+```
+
+# Combine barcharts of Shahan Col0 and other data, then add ratio as geom_tile
+```{r}
+# Complete core overlap
+core_overlap_complete <- data.frame(
+ tissue = c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff","atr_t0","col_t0","cor_t0","end_t0","lrc_t0","qc_t0","atr_t9","col_t9","cor_t9","end_t9","lrc_t9"),
+ overlap = c(134,139,149,142,184,163,123,32,155,141,179,165,151,161,55,52,74,71,80)
+)
+core_overlap_complete$prop <- core_overlap_complete$overlap / 197 * 100
+core_overlap_complete$type <- "core"
+core_overlap_complete$total <- "N/A"
+
+# Complete anticore overlap
+anticore_overlap_complete <- data.frame(
+ tissue = c("Zy14","Zy24","AC","BC","Phl_stem","Elo","Mat","Phl_diff","atr_t0","col_t0","cor_t0","end_t0","lrc_t0","qc_t0","atr_t9","col_t9","cor_t9","end_t9","lrc_t9"),
+ overlap = c(14018,12763,12384,12100,13155,13277,12961,4296,11399,10387,11619,9845,11338,10791,7238,6421,8413,7281,7918)
+)
+total_genes_complete <- data.frame(
+  tissue = c("Zy14","Zy24","Elo", "Mat", "AC", "BC", "Phl_stem", "Phl_diff","atr_t0","col_t0","cor_t0","end_t0","lrc_t0","qc_t0","atr_t9","col_t9","cor_t9","end_t9","lrc_t9"),
+  total = c(33405, 33405, 26737, 26737, 32202, 32202, 32627, 32627, 25065, 25065, 25065, 25065, 25065, 25065, 25065, 25065, 25065, 25065, 25065)
+)
+anticore_overlap_complete <- merge(anticore_overlap_complete, total_genes_complete) %>% mutate(prop = overlap/total*100, type = "anticore")
+
+# Merge core and anticore dataframes
+merged_complete <- rbind(core_overlap_complete, anticore_overlap_complete)
+merged_complete$tissue <- factor(merged_complete$tissue, levels=c("Zy14","Zy24","AC","BC","qc_t0","atr_t0","atr_t9","col_t0","col_t9","cor_t0","cor_t9","end_t0","end_t9","lrc_t0","lrc_t9","Phl_stem","Phl_diff","Elo","Mat"))
+merged_complete$type <- factor(merged_complete$type, levels=c("core","anticore"))
+
+# Extract enrichment ratio
+geom_tile_object_tmp <- core_overlap_complete
+geom_tile_object_tmp2 <- anticore_overlap_complete %>%
+  mutate(antiprop = prop) %>%
+  select(tissue, antiprop)
+geom_tile_object <- merge(geom_tile_object_tmp, geom_tile_object_tmp2) %>%
+  mutate(enrichment = log2(prop/antiprop))
+
+geom_tile_object$tissue <- factor(geom_tile_object$tissue, levels=c("Zy14","Zy24","AC","BC","qc_t0","atr_t0","atr_t9","col_t0","col_t9","cor_t0","cor_t9","end_t0","end_t9","lrc_t0","lrc_t9","Phl_stem","Phl_diff","Elo","Mat"))
+
+# Geom_tile plot
+ggplot(geom_tile_object, aes(x = 1, y = tissue, fill = enrichment)) +
+  geom_tile(color = "white", size = 2) +
+  coord_equal() +
+  scale_fill_viridis_c(name = "Enrichment", option = "viridis") +
+  theme(panel.grid = element_blank(),
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+ggsave(paste(output_path,"complete_comparison_core_anticore_overlap_tiles.pdf",sep=""), width = 10, height = 6)
+
+# Plot
+ggplot() +
+  geom_bar(data = merged_complete, aes(x = tissue, y = prop, fill = type), color = "black", position = "dodge", stat = "identity") +
+  ylim(0,100) +
+  xlab("") +
+  ylab("Shared with core (%)") +
+  prettify +
+  scale_x_discrete(labels = rev(c("Root maturation zone", "Root elongation zone", "Phloem diff. cell", "Phloem stem cell", "LRC diff. cell", "LRC stem cell", "Endodermis diff. cell", "Endodermis stem cell", "Cortex diff. cell", "Cortex stem cell", "Columella diff. cell", "Columella stem cell", "Atrichoblast diff. cell", "Atrichoblast stem cell", "Quiescent center", "Basal cell embryo", "Apical cell embryo", "24 HAP Zygote", "14 HAP Zygote"))) +
+  coord_flip() +
+  scale_fill_manual(values = c("#73D055", "#440154"))
+
+ggsave(paste(output_path,"complete_comparison_core_anticore_overlap.pdf",sep=""), width = 10, height = 6)
+```
